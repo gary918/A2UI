@@ -1,5 +1,7 @@
+import json
 import os
 from typing import Optional
+import urllib.parse
 import pandas as pd
 from google.adk.tools.tool_context import ToolContext
 
@@ -48,26 +50,40 @@ def get_sales_data_for_category(category: str, tool_context: ToolContext) -> dic
     return {"error": str(e)}
 
 
-def _generate_ascii_chart(df: pd.DataFrame) -> str:
-  """Generates an ASCII bar chart of sales by category."""
+def _generate_chart_url(df: pd.DataFrame) -> str:
+  """Generates a QuickChart URL for sales by category."""
   grouped = df.groupby("Category")["Sales"].sum().reset_index()
   if grouped.empty:
-    return "No data for chart."
+    chart_config = {
+        "type": "bar",
+        "data": {"labels": ["No Data"], "datasets": [{"data": [0]}]},
+    }
+  else:
+    categories = grouped["Category"].tolist()
+    sales = grouped["Sales"].tolist()
+    chart_config = {
+        "type": "bar",
+        "data": {
+            "labels": categories,
+            "datasets": [
+                {
+                    "label": "Sales",
+                    "data": [int(s) for s in sales],
+                    "backgroundColor": "rgba(77, 137, 249, 0.5)",
+                    "borderColor": "rgb(77, 137, 249)",
+                    "borderWidth": 1,
+                }
+            ],
+        },
+        "options": {
+            "title": {"display": True, "text": "Sales by Category"},
+            "scales": {"yAxes": [{"ticks": {"beginAtZero": True}}]},
+        },
+    }
 
-  max_sales = grouped["Sales"].max()
-  max_bar_length = 20
-
-  lines = []
-  for _, row in grouped.iterrows():
-    category = row["Category"]
-    sales = row["Sales"]
-    bar_length = (
-        int((sales / max_sales) * max_bar_length) if max_sales > 0 else 0
-    )
-    bar = "#" * bar_length
-    lines.append(f"{category:<12} : {bar} ({sales:,.0f})")
-
-  return "\n".join(lines)
+  config_str = json.dumps(chart_config)
+  encoded_config = urllib.parse.quote(config_str)
+  return f"https://quickchart.io/chart?c={encoded_config}"
 
 
 def _build_dashboard_ui(
@@ -230,7 +246,7 @@ def _build_dashboard_ui(
       "id": "chart_col",
       "component": {
           "Column": {
-              "children": {"explicitList": ["chart_title_txt", "chart_ascii_txt"]}
+              "children": {"explicitList": ["chart_title_txt", "chart_img"]}
           }
       },
   })
@@ -246,17 +262,17 @@ def _build_dashboard_ui(
       },
   })
 
-  # Chart ASCII Text
+  # Chart Image (QuickChart API)
   chart_df = (
       full_df_for_chart if full_df_for_chart is not None else table_df
   )
-  ascii_chart = _generate_ascii_chart(chart_df)
+  chart_url = _generate_chart_url(chart_df)
   components.append({
-      "id": "chart_ascii_txt",
+      "id": "chart_img",
       "component": {
-          "Text": {
-              "text": {"literalString": ascii_chart},
-              "usageHint": "body",
+          "Image": {
+              "url": {"literalString": chart_url},
+              "altText": {"literalString": "Sales by Category Bar Chart"},
           }
       },
   })
