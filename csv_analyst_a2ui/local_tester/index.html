@@ -1,0 +1,510 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>A2UI Local Tester</title>
+    <style>
+        body { font-family: sans-serif; margin: 20px; background: #f0f2f5; }
+        .container { max-width: 800px; margin: 0 auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .chat-box { border: 1px solid #ccc; padding: 10px; height: 400px; overflow-y: scroll; margin-bottom: 10px; background: #fafafa; }
+        .card { border: 1px solid #ddd; padding: 15px; margin: 10px 0; border-radius: 8px; background: white; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
+        .button { background: #007bff; color: white; padding: 8px 15px; border: none; border-radius: 4px; cursor: pointer; margin-right: 5px; }
+        .button:hover { background: #0056b3; }
+        .input-group { display: flex; gap: 10px; }
+        input[type="text"] { flex-grow: 1; padding: 8px; border: 1px solid #ccc; border-radius: 4px; }
+        select { padding: 8px; border: 1px solid #ccc; border-radius: 4px; }
+        pre { background: #f8f9fa; padding: 10px; border-radius: 4px; border: 1px solid #e9ecef; overflow-x: auto; }
+        details { margin-top: 10px; }
+        summary { cursor: pointer; color: #007bff; }
+        .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+        .session-info { font-size: 0.9em; color: #666; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>A2UI Local Tester</h1>
+            <div class="session-info">
+                <span id="session-id-display"></span>
+                <button onclick="startNewSession()" class="button" style="background: #dc3545; margin-left: 10px;">New Session</button>
+            </div>
+        </div>
+        
+        <div class="chat-box" id="chat"></div>
+        <div class="input-group">
+            <input type="text" id="input" placeholder="Type a message...">
+            <button onclick="sendMessage()" class="button">Send</button>
+        </div>
+        
+        <details>
+            <summary>Show Raw UI JSON</summary>
+            <pre id="json-dump">No UI data yet.</pre>
+        </details>
+    </div>
+
+    <script>
+        let dataModel = {};
+        let sessionId = generateSessionId();
+
+        function generateSessionId() {
+            return 'session_' + Math.random().toString(36).substr(2, 9);
+        }
+
+        function updateSessionDisplay() {
+            document.getElementById('session-id-display').textContent = `Session: ${sessionId}`;
+        }
+
+        function startNewSession() {
+            sessionId = generateSessionId();
+            updateSessionDisplay();
+            dataModel = {};
+            document.getElementById('chat').replaceChildren();
+            appendMessage('System', 'Started a new session.');
+            document.getElementById('json-dump').textContent = 'No UI data yet.';
+        }
+
+        // Call on load
+        updateSessionDisplay();
+
+        // Enter key listener
+        document.getElementById('input').addEventListener('keypress', function (e) {
+            if (e.key === 'Enter') {
+                sendMessage();
+            }
+        });
+
+        async function sendMessage() {
+            const input = document.getElementById('input');
+            const text = input.value;
+            if (!text.trim()) return;
+            input.value = '';
+            
+            appendMessage('User', text);
+            
+            await sendPayload({ message: { text: text } });
+        }
+
+        async function sendUserAction(userAction, messageText) {
+            appendMessage('User', messageText);
+            
+            const payload = {
+                message: {
+                    text: messageText,
+                    parts: [
+                        {
+                            data: { userAction: userAction },
+                            metadata: { mimeType: 'application/json+a2ui' }
+                        }
+                    ]
+                }
+            };
+            
+            await sendPayload(payload);
+        }
+
+        async function sendPayload(params) {
+            const loadingDiv = appendMessage('System', 'Agent is thinking...');
+            try {
+                const response = await fetch('/jsonrpc', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        jsonrpc: '2.0',
+                        method: 'message/send',
+                        params: { ...params, session_id: sessionId },
+                        id: Date.now()
+                    })
+                });
+                
+                const data = await response.json();
+                loadingDiv.remove();
+                handleResponse(data);
+            } catch (error) {
+                loadingDiv.remove();
+                appendMessage('Error', `Failed to connect to server: ${error.message}`);
+            }
+        }
+
+        function appendMessage(sender, text) {
+            const chat = document.getElementById('chat');
+            const div = document.createElement('div');
+            div.style.marginBottom = '10px';
+            
+            const strong = document.createElement('strong');
+            strong.textContent = sender + ': ';
+            
+            const textNode = document.createTextNode(text);
+            
+            div.appendChild(strong);
+            div.appendChild(textNode);
+            chat.appendChild(div);
+            chat.scrollTop = chat.scrollHeight;
+            return div;
+        }
+
+        let currentRootId = null;
+
+        function handleResponse(data) {
+            if (data.error) {
+                appendMessage('Error', data.error.message);
+                return;
+            }
+            
+            const parts = data.result.message.parts;
+            
+            // First pass to find beginRendering and extract root ID
+            for (const part of parts) {
+                if (part.data && part.metadata && part.metadata.mimeType === 'application/json+a2ui') {
+                    const uiData = part.data;
+                    if (uiData.beginRendering) {
+                        currentRootId = uiData.beginRendering.root;
+                    }
+                }
+            }
+            
+            for (const part of parts) {
+                if (part.text) {
+                    appendMessage('Agent', part.text);
+                }
+                if (part.data && part.metadata && part.metadata.mimeType === 'application/json+a2ui') {
+                    const uiData = part.data;
+                    console.log("Received UI Data:", uiData);
+                    
+                    // Handle Data Model Updates
+                    if (uiData.dataModelUpdate) {
+                        const contents = uiData.dataModelUpdate.contents || [];
+                        for (const item of contents) {
+                            dataModel[item.key] = item.valueString || item.valueNumber || item.valueBoolean;
+                        }
+                    }
+                    
+                    // Handle Surface Updates (Rendering)
+                    if (uiData.surfaceUpdate) {
+                        document.getElementById('json-dump').textContent = JSON.stringify(uiData, null, 2);
+                        const rootToUse = uiData.surfaceUpdate.root || currentRootId;
+                        renderUI(uiData.surfaceUpdate, rootToUse);
+                    }
+                }
+            }
+        }
+
+        function renderUI(surfaceUpdate, rootId) {
+            const chat = document.getElementById('chat');
+            const div = document.createElement('div');
+            div.className = 'card';
+            
+            const h4 = document.createElement('h4');
+            h4.textContent = 'Rich UI View';
+            div.appendChild(h4);
+            
+            const components = surfaceUpdate.components;
+            
+            if (rootId && components) {
+                const rendered = renderComponent(rootId, components);
+                if (rendered) {
+                    div.appendChild(rendered);
+                }
+            }
+            
+            chat.appendChild(div);
+            chat.scrollTop = chat.scrollHeight;
+        }
+
+        function renderComponent(componentId, components) {
+            console.log("Rendering component:", componentId);
+            const compWrapper = components.find(c => c.id === componentId);
+            if (!compWrapper) {
+                console.warn("Component not found:", componentId);
+                return document.createTextNode(`[Missing: ${componentId}]`);
+            }
+            
+            const comp = compWrapper.component;
+            console.log("Component data:", comp);
+            
+            if (comp.Text) {
+                const div = document.createElement('div');
+                div.textContent = comp.Text.text.literalString || (comp.Text.text.path ? dataModel[comp.Text.text.path] : "");
+                if (comp.Text.usageHint === 'h1') div.style.fontSize = '1.8em';
+                if (comp.Text.usageHint === 'h2') div.style.fontSize = '1.4em';
+                if (comp.Text.usageHint === 'h3') div.style.fontSize = '1.2em';
+                div.style.marginBottom = '5px';
+                return div;
+            }
+            
+            if (comp.Card) {
+                const div = document.createElement('div');
+                div.style.border = '1px solid #ccc';
+                div.style.padding = '10px';
+                div.style.borderRadius = '5px';
+                div.style.background = '#fff';
+                div.style.marginBottom = '10px';
+                if (comp.Card.child) {
+                    div.appendChild(renderComponent(comp.Card.child, components));
+                }
+                return div;
+            }
+            
+            if (comp.Column) {
+                const div = document.createElement('div');
+                div.style.display = 'flex';
+                div.style.flexDirection = 'column';
+                div.style.gap = '10px';
+                const children = comp.Column.children.explicitList || [];
+                for (const childId of children) {
+                    div.appendChild(renderComponent(childId, components));
+                }
+                return div;
+            }
+            
+            if (comp.Row) {
+                const div = document.createElement('div');
+                div.style.display = 'flex';
+                div.style.flexDirection = 'row';
+                div.style.gap = '10px';
+                div.style.justifyContent = comp.Row.distribution === 'spaceAround' ? 'space-around' : 'flex-start';
+                const children = comp.Row.children.explicitList || [];
+                for (const childId of children) {
+                    div.appendChild(renderComponent(childId, components));
+                }
+                return div;
+            }
+            
+            if (comp.Button) {
+                const btn = document.createElement('button');
+                btn.className = 'button';
+                if (comp.Button.child) {
+                    const childComp = components.find(c => c.id === comp.Button.child);
+                    if (childComp && childComp.component.Text) {
+                        btn.textContent = childComp.component.Text.text.literalString;
+                    } else {
+                        btn.textContent = comp.Button.child;
+                    }
+                }
+                
+                if (comp.Button.action) {
+                    btn.onclick = () => {
+                        const context = comp.Button.action.context || [];
+                        const msgItem = context.find(i => i.key === 'message');
+                        let msgText = "Action triggered";
+                        if (msgItem) {
+                            msgText = msgItem.value.literalString || "Action triggered";
+                        }
+                        
+                        // Construct userAction payload
+                        const userAction = {
+                            name: comp.Button.action.name,
+                            context: {}
+                        };
+                        
+                        for (const item of context) {
+                            const key = item.key;
+                            const valObj = item.value;
+                            let val = "";
+                            if (valObj.literalString) {
+                                val = valObj.literalString;
+                            } else if (valObj.path) {
+                                val = dataModel[valObj.path] || "";
+                            }
+                            userAction.context[key] = val;
+                        }
+                        
+                        sendUserAction(userAction, msgText);
+                    };
+                }
+                return btn;
+            }
+            
+            // Standard Tabs Component
+            if (comp.Tabs) {
+                const container = document.createElement('div');
+                container.className = 'tabs-container';
+                
+                const header = document.createElement('div');
+                header.className = 'tabs-header';
+                header.style.display = 'flex';
+                header.style.borderBottom = '1px solid #ccc';
+                header.style.marginBottom = '10px';
+                
+                const content = document.createElement('div');
+                content.className = 'tabs-content';
+                
+                const tabItems = comp.Tabs.tabItems || [];
+                const tabButtons = [];
+                const tabContents = [];
+                
+                tabItems.forEach((item, index) => {
+                    const btn = document.createElement('button');
+                    btn.className = 'tab-button';
+                    btn.style.padding = '10px 15px';
+                    btn.style.border = 'none';
+                    btn.style.background = 'none';
+                    btn.style.cursor = 'pointer';
+                    btn.style.borderBottom = '2px solid transparent';
+                    
+                    const titleStr = item.title.literalString || (item.title.path ? dataModel[item.title.path] : `Tab ${index}`);
+                    btn.textContent = titleStr;
+                    
+                    const tabContent = document.createElement('div');
+                    tabContent.style.display = index === 0 ? 'block' : 'none';
+                    
+                    const childElement = renderComponent(item.child, components);
+                    if (childElement) {
+                        tabContent.appendChild(childElement);
+                    }
+                    
+                    btn.onclick = () => {
+                        tabButtons.forEach((b, i) => {
+                            b.style.borderBottom = '2px solid transparent';
+                            b.style.fontWeight = 'normal';
+                            tabContents[i].style.display = 'none';
+                        });
+                        btn.style.borderBottom = '2px solid #007bff';
+                        btn.style.fontWeight = 'bold';
+                        tabContent.style.display = 'block';
+                    };
+                    
+                    if (index === 0) {
+                        btn.style.borderBottom = '2px solid #007bff';
+                        btn.style.fontWeight = 'bold';
+                    }
+                    
+                    header.appendChild(btn);
+                    content.appendChild(tabContent);
+                    
+                    tabButtons.push(btn);
+                    tabContents.push(tabContent);
+                });
+                
+                container.appendChild(header);
+                container.appendChild(content);
+                return container;
+            }
+
+            // Custom Table Component
+            if (comp.Table) {
+                const tableComp = comp.Table;
+                const columns = tableComp.columns || [];
+                const dataKey = tableComp.dataKey;
+                
+                const table = document.createElement('table');
+                table.style.width = '100%';
+                table.style.borderCollapse = 'collapse';
+                table.style.marginTop = '10px';
+                
+                const thead = document.createElement('thead');
+                const headerRow = document.createElement('tr');
+                headerRow.style.borderBottom = '2px solid #ddd';
+                columns.forEach(col => {
+                    const th = document.createElement('th');
+                    th.textContent = col;
+                    th.style.padding = '8px';
+                    th.style.textAlign = 'left';
+                    headerRow.appendChild(th);
+                });
+                thead.appendChild(headerRow);
+                table.appendChild(thead);
+                
+                const tbody = document.createElement('tbody');
+                const rowCountKey = `${dataKey}.rowCount`;
+                const rowCount = dataModel[rowCountKey] || 0;
+                
+                for (let i = 0; i < rowCount; i++) {
+                    const tr = document.createElement('tr');
+                    tr.style.borderBottom = '1px solid #eee';
+                    columns.forEach(col => {
+                        const td = document.createElement('td');
+                        const key = `${dataKey}.rows[${i}].${col}`;
+                        td.textContent = dataModel[key] !== undefined ? dataModel[key] : '';
+                        td.style.padding = '8px';
+                        tr.appendChild(td);
+                    });
+                    tbody.appendChild(tr);
+                }
+                table.appendChild(tbody);
+                return table;
+            }
+
+            // Custom BarChart Component
+            if (comp.BarChart) {
+                const chartComp = comp.BarChart;
+                const title = chartComp.title;
+                const dataKey = chartComp.dataKey;
+                
+                const container = document.createElement('div');
+                container.style.marginTop = '10px';
+                
+                if (title) {
+                    const h5 = document.createElement('h5');
+                    h5.textContent = title;
+                    h5.style.margin = '0 0 10px 0';
+                    container.appendChild(h5);
+                }
+                
+                const itemCountKey = `${dataKey}.itemCount`;
+                const itemCount = dataModel[itemCountKey] || 0;
+                
+                const items = [];
+                let maxValue = 0;
+                for (let i = 0; i < itemCount; i++) {
+                    const label = dataModel[`${dataKey}.items[${i}].label`] || '';
+                    const value = dataModel[`${dataKey}.items[${i}].value`] || 0;
+                    items.push({ label, value });
+                    if (value > maxValue) maxValue = value;
+                }
+                
+                items.forEach(item => {
+                    const row = document.createElement('div');
+                    row.style.display = 'flex';
+                    row.style.alignItems = 'center';
+                    row.style.marginBottom = '5px';
+                    
+                    const labelDiv = document.createElement('div');
+                    labelDiv.textContent = item.label;
+                    labelDiv.style.width = '120px';
+                    labelDiv.style.fontSize = '0.9em';
+                    
+                    const barContainer = document.createElement('div');
+                    barContainer.style.flexGrow = '1';
+                    barContainer.style.background = '#e9ecef';
+                    barContainer.style.height = '20px';
+                    barContainer.style.borderRadius = '4px';
+                    barContainer.style.overflow = 'hidden';
+                    barContainer.style.marginRight = '10px';
+                    
+                    const bar = document.createElement('div');
+                    const pct = maxValue > 0 ? (item.value / maxValue) * 100 : 0;
+                    bar.style.width = `${pct}%`;
+                    bar.style.background = '#007bff';
+                    bar.style.height = '100%';
+                    barContainer.appendChild(bar);
+                    
+                    const valueDiv = document.createElement('div');
+                    valueDiv.textContent = item.value;
+                    valueDiv.style.width = '50px';
+                    valueDiv.style.textAlign = 'right';
+                    valueDiv.style.fontSize = '0.9em';
+                    
+                    row.appendChild(labelDiv);
+                    row.appendChild(barContainer);
+                    row.appendChild(valueDiv);
+                    container.appendChild(row);
+                });
+                
+                return container;
+            }
+            
+            const fallbackDiv = document.createElement('div');
+            fallbackDiv.style.border = '1px dashed #ffc107';
+            fallbackDiv.style.padding = '10px';
+            fallbackDiv.style.margin = '5px 0';
+            fallbackDiv.style.borderRadius = '4px';
+            fallbackDiv.style.background = '#fff8e1';
+            fallbackDiv.style.color = '#856404';
+            
+            const type = Object.keys(comp)[0] || "Unknown";
+            fallbackDiv.textContent = `[${type}] ${componentId}`;
+            
+            return fallbackDiv;
+        }
+    </script>
+</body>
+</html>

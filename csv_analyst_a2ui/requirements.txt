@@ -1,0 +1,9 @@
+google-genai>=1.27.0
+google-adk>=1.28.1
+pandas
+fastapi
+uvicorn
+pydantic
+python-dotenv
+a2a-sdk>=0.3.0
+a2ui-agent-sdk @ git+https://github.com/google/A2UI.git#subdirectory=agent_sdks/python
