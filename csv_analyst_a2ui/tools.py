@@ -55,14 +55,14 @@ def _generate_chart_url(df: pd.DataFrame) -> str:
   grouped = df.groupby("Category")["Sales"].sum().reset_index()
   if grouped.empty:
     chart_config = {
-        "type": "bar",
+        "type": "horizontalBar",
         "data": {"labels": ["No Data"], "datasets": [{"data": [0]}]},
     }
   else:
     categories = grouped["Category"].tolist()
     sales = grouped["Sales"].tolist()
     chart_config = {
-        "type": "bar",
+        "type": "horizontalBar",
         "data": {
             "labels": categories,
             "datasets": [
@@ -76,14 +76,28 @@ def _generate_chart_url(df: pd.DataFrame) -> str:
             ],
         },
         "options": {
-            "title": {"display": True, "text": "Sales by Category"},
-            "scales": {"yAxes": [{"ticks": {"beginAtZero": True}}]},
+            "title": {
+                "display": True,
+                "text": "Sales by Category",
+                "fontSize": 36,
+            },
+            "scales": {
+                "xAxes": [{"ticks": {"beginAtZero": True, "fontSize": 24}}],
+                "yAxes": [{"ticks": {"fontSize": 24}}],
+            },
+            "plugins": {
+                "datalabels": {
+                    "anchor": "end",
+                    "align": "right",
+                    "font": {"size": 24, "weight": "bold"},
+                }
+            },
         },
     }
 
   config_str = json.dumps(chart_config)
   encoded_config = urllib.parse.quote(config_str)
-  return f"https://quickchart.io/chart?c={encoded_config}"
+  return f"https://quickchart.io/chart?c={encoded_config}&width=1800&height=900"
 
 
 def _build_dashboard_ui(
